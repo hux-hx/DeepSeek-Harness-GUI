@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DeepSeek Harness
+GenericName=AI Agent Workspace
+GenericName[zh_CN]=AI 智能体工作台
+Comment=The DeepSeek Harness web UI in a native desktop window
+Comment[zh_CN]=在原生桌面窗口中运行 DeepSeek Harness Web 界面
+Exec=__INSTALL_DIR__/bin/deepseek-harness-desktop
+TryExec=__INSTALL_DIR__/bin/deepseek-harness-desktop
+Icon=__INSTALL_DIR__/share/icons/hicolor/256x256/apps/deepseek-harness-desktop.png
+Terminal=false
+Categories=Development;IDE;
+Keywords=deepseek;harness;dsh;agent;ai;
+StartupWMClass=deepseek-harness-desktop
+StartupNotify=true

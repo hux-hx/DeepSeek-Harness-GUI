@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- DeepSeek Harness Desktop (Linux): terminal prompt on the DeepSeek blue -->
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#4D6BFE"/>
+  <rect x="52" y="52" width="152" height="152" rx="32" fill="#FFFFFF"/>
+  <path d="M86 102 L114 128 L86 154" fill="none" stroke="#2B4ACF" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M130 158 H172" fill="none" stroke="#2B4ACF" stroke-width="16" stroke-linecap="round"/>
+</svg>
