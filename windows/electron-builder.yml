@@ -1,0 +1,49 @@
+# Electron builder config for DeepSeek Harness Desktop
+appId: com.deepseek.harness
+productName: DeepSeek Harness
+copyright: Copyright © 2026 hux-hx
+
+directories:
+  output: dist
+  buildResources: share/icons
+
+files:
+  - src/**/*
+  - package.json
+
+extraResources:
+  - from: ../bin/deepseek-harness-desktop
+    to: bin/
+  - from: ../share/icons/hicolor
+    to: share/icons/hicolor
+  - from: ../share/icons/windows
+    to: share/icons/windows
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: share/icons/windows/deepseek-harness-desktop.ico
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DeepSeek Harness
+  menuCategory: DeepSeek
+  installerIcon: share/icons/windows/deepseek-harness-desktop.ico
+  uninstallerIcon: share/icons/windows/deepseek-harness-desktop.ico
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64]
+  category: Development;IDE;
+  icon: share/icons/hicolor
+
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+  icon: share/icons/hicolor/256x256/apps/deepseek-harness-desktop.png

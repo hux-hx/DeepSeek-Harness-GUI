@@ -17,6 +17,38 @@ import yaml
 
 from dshdesktop_core import find_repo_root, sidecar_env
 
+# Recommended context-compression plugins, curated from the community.
+# These three form a complete system:
+#   1. billion-context-dsh   — model-driven automatic compaction (decides when/what to compress)
+#   2. dsh-compaction-instant — zero-model-call instant compression (milliseconds, no paraphrase)
+#   3. dsh-memory-plugin     — cross-session memory via OpenViking context database
+#
+# Install command for each:
+#   dsh plugin --profile web add "<spec>"
+RECOMMENDED_PLUGINS: list[dict] = [
+    {
+        'name': 'billion-context-dsh',
+        'description': 'Model-driven context compression (ACP) — the model decides when and what to compress',
+        'install_spec': 'github:Tyan66666/billion-context-dsh#main',
+        'install_label': 'billion-context-dsh (auto-compact)',
+        'badge': '★ auto-compact',
+    },
+    {
+        'name': 'dsh-compaction-instant',
+        'description': 'Zero-model-call instant compression — compresses history spans in milliseconds, no paraphrase or hallucination',
+        'install_spec': 'github:KitDoesIt/dsh-compaction-instant#main',
+        'install_label': 'dsh-compaction-instant',
+        'badge': '★ instant',
+    },
+    {
+        'name': 'dsh-memory-plugin',
+        'description': 'OpenViking cross-session memory — connects dsh to OpenViking self-evolving context database for RAG',
+        'install_spec': 'github:volcengine/OpenViking#main:examples/dsh-memory-plugin',
+        'install_label': 'dsh-memory-plugin (OpenViking)',
+        'badge': '★ openwolf',
+    },
+]
+
 
 class HubContext:
     """Everything hub operations need: the app's DSH_HOME and dsh launcher."""
@@ -176,6 +208,19 @@ def run_plugin_command(ctx: HubContext, args: list[str], on_output) -> int:
     return proc.wait()
 
 
+def install_github_plugin(ctx: HubContext, spec: str, display_name: str, on_output) -> bool:
+    """Install a plugin from a GitHub spec and register it in cordis.patch.yml."""
+    # Derive a plugin id from the spec (e.g. "github:Tyan66666/billion-context-dsh#main" → "billion-context-dsh")
+    plugin_id = default_plugin_id(display_name)
+    on_output(f'$ dsh plugin --profile web add {spec}')
+    if run_plugin_command(ctx, ['add', spec], on_output) != 0:
+        on_output('! install failed; nothing registered')
+        return False
+    register(ctx, plugin_id, display_name)
+    on_output(f"registered '{plugin_id}' ({display_name}) in cordis.patch.yml — reload the Web UI")
+    return True
+
+
 def install_and_register(ctx: HubContext, plugin_id: str, package: str, on_output) -> bool:
     """Install the npm package into the profile, then register the plugin id."""
     on_output(f'$ dsh plugin --profile web add {package}')
@@ -280,6 +325,14 @@ def run_gtk_hub(ctx: HubContext) -> None:
             known.setdefault(item['name'], item)
         for name, version in dependencies.items():
             known.setdefault(name, {'name': name, 'description': f'installed {version}'})
+
+        # Recommended plugins section (always shown at top)
+        for rec in RECOMMENDED_PLUGINS:
+            name = rec['name']
+            installed = name in nodes or any(name in b for b in bundles) or name in registered.values()
+            store.append([installed, rec.get('badge', ''), name, rec['description']])
+
+        # Regular catalog items
         for name, version in sorted(known.items()):
             plugin_ids = [pid for pid, pkg in registered.items() if pkg == name]
             plugin_id = plugin_ids[0] if plugin_ids else ''
@@ -295,14 +348,22 @@ def run_gtk_hub(ctx: HubContext) -> None:
         return model[tree_iter][1], model[tree_iter][2]
 
     def on_install(_button) -> None:
-        plugin_id = id_entry.get_text().strip() or default_plugin_id(pkg_entry.get_text().strip())
-        package = pkg_entry.get_text().strip()
+        raw = pkg_entry.get_text().strip()
         picked = selected()
-        if not package and picked:
-            plugin_id = plugin_id if id_entry.get_text().strip() else default_plugin_id(picked[1])
-            package = picked[1]
+        # Check if user selected a recommended plugin
+        if picked:
+            rec_names = {r['name'] for r in RECOMMENDED_PLUGINS}
+            if picked[1] in rec_names or picked[2] in rec_names:
+                rec = next((r for r in RECOMMENDED_PLUGINS if r['name'] == picked[2] or r['name'] == picked[1]), None)
+                if rec:
+                    busy.set_text(f'installing: {rec["install_label"]} …')
+                    thread_run(lambda: install_github_plugin(ctx, rec['install_spec'], rec['name'], log), refresh, busy)
+                    return
+        # Normal install
+        plugin_id = id_entry.get_text().strip() or default_plugin_id(raw or (picked[2] if picked else ''))
+        package = raw or (picked[2] if picked else '')
         if not package:
-            log('! enter an npm package name first')
+            log('! enter a package name or GitHub spec first')
             return
         busy.set_text(f'working: {package} …')
         thread_run(lambda: install_and_register(ctx, plugin_id, package, log), refresh, busy)
@@ -406,23 +467,39 @@ def run_tk_hub(ctx: HubContext) -> None:
                                             known[name].get('description', '')))
 
     def on_install() -> None:
-        package = pkg_entry.get().strip()
+        raw = pkg_entry.get().strip()
         picked = tree.selection()
+        # Check if user selected a recommended plugin
+        if picked:
+            sel_name = str(tree.item(picked[0])['values'][2])
+            rec_names = {r['name'] for r in RECOMMENDED_PLUGINS}
+            if sel_name in rec_names:
+                rec = next(r for r in RECOMMENDED_PLUGINS if r['name'] == sel_name)
+                busy.configure(text=f'installing: {rec["install_label"]} …')
+                def work() -> None:
+                    try:
+                        install_github_plugin(ctx, rec['install_spec'], rec['name'], log)
+                    finally:
+                        window.after(0, refresh)
+                        window.after(0, lambda: busy.configure(text=''))
+                import threading
+                threading.Thread(target=work, daemon=True).start()
+                return
+        # Normal install
+        package = raw
         if not package and picked:
             package = tree.item(picked[0])['values'][2]
         if not package:
-            log('! enter an npm package name first')
+            log('! enter a package name or GitHub spec first')
             return
         plugin_id = id_entry.get().strip() or default_plugin_id(package)
         busy.configure(text=f'working: {package} …')
-
         def work() -> None:
             try:
                 install_and_register(ctx, plugin_id, package, log)
             finally:
                 window.after(0, refresh)
                 window.after(0, lambda: busy.configure(text=''))
-
         import threading
         threading.Thread(target=work, daemon=True).start()
 

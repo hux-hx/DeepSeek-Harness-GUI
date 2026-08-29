@@ -1,0 +1,66 @@
+{
+  "name": "deepseek-harness-desktop",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness Desktop — native window shell with supervised dsh sidecar",
+  "main": "src/main.js",
+  "author": "hux-hx",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/package.mjs",
+    "dist": "electron-builder --config electron-builder.yml",
+    "dist:win": "electron-builder --win --x64 --config electron-builder.yml",
+    "dist:linux": "electron-builder --linux --x64 --config electron-builder.yml"
+  },
+  "devDependencies": {
+    "cross-spawn": "7.0.6",
+    "electron": "37.2.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.deepseek.harness",
+    "productName": "DeepSeek Harness",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "share/icons/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../bin/deepseek-harness-desktop",
+        "to": "bin/"
+      },
+      {
+        "from": "../share/icons/hicolor",
+        "to": "share/icons/hicolor"
+      }
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "icon": "share/icons/windows/deepseek-harness-desktop.ico",
+      "artifactName": "${productName}-${version}-win-x64.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "DeepSeek Harness",
+      "installerIcon": "share/icons/windows/deepseek-harness-desktop.ico",
+      "uninstallerIcon": "share/icons/windows/deepseek-harness-desktop.ico",
+      "installerHeaderIcon": "share/icons/windows/deepseek-harness-desktop.ico",
+      "menuCategory": "DeepSeek"
+    },
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] }
+      ],
+      "category": "Development;IDE;",
+      "icon": "share/icons/hicolor"
+    }
+  }
+}

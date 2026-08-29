@@ -1,0 +1,332 @@
+#!/usr/bin/env python3
+"""DeepSeek Harness Desktop: the harness `dsh web` UI in a native window.
+
+- Boots `dsh web` as a supervised sidecar (own DSH_HOME, OS-picked port) and
+  shows the UI in WebKit2GTK (Linux) or WebView2 via pywebview (Windows).
+- Imports configuration from an existing local harness home on first run, so
+  the user configures nothing twice (`--fresh` skips the import).
+- `--plugins` opens the built-in plugin hub for the web profile.
+- `--attach URL` wraps an already-running dsh web UI without a sidecar.
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import dshdesktop_core as core
+from dshdesktop_core import (APP_ID, APP_NAME, APP_VERSION, ATTACH_TIMEOUT_SECONDS,
+                             BOOT_TIMEOUT_SECONDS, Sidecar, data_dir, import_local_config,
+                             resolve_dsh)
+
+HUB_AVAILABLE_WITHOUT_SIDECAR = False
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        prog=APP_ID,
+        description=f'{APP_NAME} desktop GUI: the dsh web UI in a native window.',
+    )
+    parser.add_argument('--attach', metavar='URL',
+                        help='wrap an already-running dsh web UI instead of booting a sidecar')
+    parser.add_argument('--port', type=int, default=0,
+                        help='sidecar listen port (default: 0, the OS picks a free one)')
+    parser.add_argument('--home', metavar='DIR',
+                        help='DSH_HOME for the sidecar (default: a dedicated data dir)')
+    parser.add_argument('--dsh', metavar='PATH',
+                        help='dsh executable to launch (default: repo checkout or installed dsh)')
+    parser.add_argument('--repo', metavar='DIR',
+                        help='harness checkout for source mode and the hub catalog (or set DSH_REPO)')
+    parser.add_argument('--geometry', metavar='WxH', help='initial window size')
+    parser.add_argument('--fresh', action='store_true',
+                        help="skip importing configuration from the local harness home")
+    parser.add_argument('--plugins', action='store_true',
+                        help='open the plugin hub for the web profile and exit when it closes')
+    parser.add_argument('--check', action='store_true',
+                        help='boot the sidecar, print the URL once ready, shut down, exit')
+    parser.add_argument('--version', action='version', version=f'{APP_ID} {APP_VERSION}')
+    return parser.parse_args()
+
+
+def prepare_home(args: argparse.Namespace) -> tuple[Path, list[str]]:
+    """Resolve the app's DSH_HOME and run the one-time local-config import."""
+    home = Path(args.home).expanduser() if args.home else core.default_home()
+    if args.repo:
+        import os
+
+        os.environ['DSH_REPO'] = str(Path(args.repo).expanduser())
+    imported = [] if args.fresh else import_local_config(home)
+    return home, imported
+
+
+def run_check(args: argparse.Namespace) -> int:
+    """Headless verification: boot the sidecar, prove readiness, shut it down."""
+    mode, prefix, workdir = resolve_dsh(args.dsh)
+    home, imported = prepare_home(args)
+    print(f'dsh: {mode} mode via {" ".join(prefix)}')
+    print(f'DSH_HOME: {home}')
+    if imported:
+        print(f'imported local configuration: {", ".join(imported)}')
+    sidecar = Sidecar(prefix, workdir, home, args.port)
+    sidecar.start()
+    try:
+        url = sidecar.wait_until_ready(BOOT_TIMEOUT_SECONDS)
+        print(f'ready: {url}')
+        return 0
+    finally:
+        sidecar.shutdown()
+
+
+def run_plugins(args: argparse.Namespace) -> int:
+    """Open the plugin hub against the web profile (sidecar not required)."""
+    import dshdesktop_hub
+
+    mode, prefix, workdir = resolve_dsh(args.dsh)
+    home, imported = prepare_home(args)
+    if not (home / 'profiles' / 'web').is_dir():
+        core.show_error(
+            'The web profile is not initialized yet. Start the app once (it boots the '
+            'dsh web profile), then open the Plugin Hub.'
+        )
+        return 1
+    if core.is_windows():
+        dshdesktop_hub.run_tk_hub(dshdesktop_hub.HubContext(home, prefix, workdir))
+    else:
+        dshdesktop_hub.run_gtk_hub(dshdesktop_hub.HubContext(home, prefix, workdir))
+    return 0
+
+
+def boot_sidecar_or_attach(args: argparse.Namespace) -> tuple[str, Sidecar | None]:
+    """Return the UI URL, booting a supervised sidecar unless --attach is given."""
+    if args.attach:
+        url = args.attach
+        deadline = time.monotonic() + ATTACH_TIMEOUT_SECONDS
+        while not Sidecar._responds(url) and time.monotonic() < deadline:
+            time.sleep(0.25)
+        if not Sidecar._responds(url):
+            raise RuntimeError(f'nothing is serving {url}; start `dsh web` first')
+        return url, None
+
+    mode, prefix, workdir = resolve_dsh(args.dsh)
+    home, imported = prepare_home(args)
+    sidecar = Sidecar(prefix, workdir, home, args.port)
+    sidecar.start()
+    url = sidecar.wait_until_ready(BOOT_TIMEOUT_SECONDS)
+    if imported:
+        print(f'imported local configuration: {", ".join(imported)}', file=sys.stderr)
+    print(f'dsh web ready at {url} (DSH_HOME: {home})', file=sys.stderr)
+    return url, sidecar
+
+
+def run_gtk_window(url: str, sidecar: Sidecar | None, geometry: str | None) -> int:
+    """Build the GTK window with the hub toolbar, run the main loop."""
+    import gi
+
+    gi.require_version('Gtk', '3.0')
+    # Gtk 3.0 needs Gdk 3.0; without an explicit require, gi loads the default
+    # Gdk 4.0 first and every later Gtk 3.0 import raises a namespace conflict.
+    gi.require_version('Gdk', '3.0')
+    gi.require_version('WebKit2', '4.1')
+    from gi.repository import Gdk, GLib, Gtk, WebKit2
+
+    GLib.set_prgname(APP_ID)
+    GLib.set_application_name(APP_NAME)
+
+    state = core.load_window_state()
+    width, height = 1280, 832
+    if geometry:
+        width, height = (int(part) for part in geometry.split('x', 1))
+    elif 'width' in state and 'height' in state:
+        width, height = int(state['width']), int(state['height'])
+
+    icon = core.app_root() / 'share' / 'icons' / 'hicolor' / '256x256' / 'apps' / f'{APP_ID}.png'
+    if icon.exists():
+        Gtk.Window.set_default_icon_from_file(str(icon))
+
+    window = Gtk.Window(title=APP_NAME)
+    window.set_default_size(width, height)
+    if state.get('maximized'):
+        window.maximize()
+
+    webview = WebKit2.WebView()
+    settings = webview.get_settings()
+    settings.set_enable_developer_extras(True)
+
+    url_label = Gtk.Label(label=url)
+    url_label.set_ellipsize(3)  # Pango.EllipsizeMode.END
+    url_label.set_halign(Gtk.Align.START)
+    url_label.get_style_context().add_class('dim-label')
+
+    def open_hub(_button) -> None:
+        if sidecar is None:
+            core.show_error(
+                'The plugin hub manages the app\'s own web profile. It is unavailable '
+                'in --attach mode; start the app without --attach.'
+            )
+            return
+        import dshdesktop_hub
+
+        dshdesktop_hub.run_gtk_hub(
+            dshdesktop_hub.HubContext(sidecar.home, sidecar.command_prefix, sidecar.workdir))
+
+    hub_button = Gtk.Button(label='Plugin Hub')
+    hub_button.connect('clicked', open_hub)
+
+    toolbar = Gtk.Box(spacing=8)
+    toolbar.pack_start(hub_button, False, False, 0)
+    toolbar.pack_start(url_label, True, True, 0)
+
+    outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    toolbar.set_border_width(4)
+    outer.pack_start(toolbar, False, False, 0)
+    outer.pack_start(webview, True, True, 0)
+    window.add(outer)
+
+    def restore_zoom() -> None:
+        zoom = float(state.get('zoom', 1.0))
+        webview.set_zoom_level(min(max(zoom, 0.3), 3.0))
+
+    def change_zoom(step: float) -> None:
+        webview.set_zoom_level(min(max(webview.get_zoom_level() + step, 0.3), 3.0))
+
+    def on_decide_policy(_webview: WebKit2.WebView, decision: WebKit2.PolicyDecision,
+                         decision_type: WebKit2.PolicyDecisionType) -> bool:
+        if decision_type in (WebKit2.PolicyDecisionType.NAVIGATION_ACTION,
+                             WebKit2.PolicyDecisionType.NEW_WINDOW_ACTION):
+            action = decision.get_navigation_action()
+            uri = action.get_request().get_uri()
+            if core.is_external_uri(uri, url):
+                import webbrowser
+
+                webbrowser.open_new_tab(uri)
+                decision.ignore()
+                return True
+        return False
+
+    def on_notify_title(webview_: WebKit2.WebView, _param) -> None:
+        title = webview_.get_title()
+        window.set_title(f'{title} — {APP_NAME}' if title else APP_NAME)
+
+    def on_key_press(_widget, event: Gdk.EventKey) -> bool:
+        keyval = event.keyval
+        state_key = event.state & Gtk.accelerator_get_default_mod_mask()
+        has_ctrl = bool(state_key & Gdk.ModifierType.CONTROL_MASK)
+        has_shift = bool(state_key & Gdk.ModifierType.SHIFT_MASK)
+        fullscreen = bool(window.get_window() and
+                          window.get_window().get_state() & Gdk.WindowState.FULLSCREEN)
+        if keyval == Gdk.KEY_F11:
+            if fullscreen:
+                window.unfullscreen()
+            else:
+                window.fullscreen()
+            return True
+        if has_ctrl and has_shift and keyval in (Gdk.KEY_r, Gdk.KEY_R):
+            webview.reload_bypass_cache()
+            return True
+        if has_ctrl and keyval in (Gdk.KEY_r, Gdk.KEY_R):
+            webview.reload()
+            return True
+        if has_ctrl and keyval in (Gdk.KEY_plus, Gdk.KEY_equal, Gdk.KEY_KP_Add):
+            change_zoom(0.1)
+            return True
+        if has_ctrl and keyval in (Gdk.KEY_minus, Gdk.KEY_KP_Subtract):
+            change_zoom(-0.1)
+            return True
+        if has_ctrl and keyval == Gdk.KEY_0:
+            webview.set_zoom_level(1.0)
+            return True
+        if has_ctrl and keyval == Gdk.KEY_q:
+            window.close()
+            return True
+        return False
+
+    def on_delete_event(_widget, _event) -> bool:
+        window_state = {
+            'width': window.get_size()[0],
+            'height': window.get_size()[1],
+            'maximized': bool(window.get_window() and
+                              window.get_window().get_state() & Gdk.WindowState.MAXIMIZED),
+            'zoom': webview.get_zoom_level(),
+        }
+        core.save_window_state(window_state)
+        Gtk.main_quit()
+        return False
+
+    webview.connect('decide-policy', on_decide_policy)
+    webview.connect('notify::title', on_notify_title)
+    window.connect('key-press-event', on_key_press)
+    window.connect('delete-event', on_delete_event)
+
+    window.show_all()
+    restore_zoom()
+    webview.load_uri(url)
+
+    def on_signal(_signum) -> bool:
+        window.close()
+        return GLib.SOURCE_REMOVE
+
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, 2, on_signal, None)  # SIGINT
+    GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, 15, on_signal, None)  # SIGTERM
+
+    try:
+        Gtk.main()
+    finally:
+        if sidecar is not None:
+            sidecar.shutdown()
+    return 0
+
+
+def run_webview_window(url: str, sidecar: Sidecar | None, geometry: str | None) -> int:
+    """Windows shell: a WebView2 (pywebview) window; hub via `--plugins`."""
+    try:
+        import webview
+    except ImportError:
+        core.show_error(
+            'pywebview is required on Windows: py -3 -m pip install pywebview\n'
+            'It uses the WebView2 runtime already present on Windows 10/11.'
+        )
+        if sidecar is not None:
+            sidecar.shutdown()
+        return 1
+    width, height = 1280, 832
+    if geometry:
+        width, height = (int(part) for part in geometry.split('x', 1))
+    webview.create_window(APP_NAME, url, width=width, height=height)
+    try:
+        webview.start()
+    finally:
+        if sidecar is not None:
+            sidecar.shutdown()
+    return 0
+
+
+def main() -> int:
+    args = parse_args()
+    if args.check:
+        return run_check(args)
+    if args.plugins:
+        return run_plugins(args)
+
+    sidecar: Sidecar | None = None
+    try:
+        url, sidecar = boot_sidecar_or_attach(args)
+    except Exception as error:  # noqa: BLE001 — every boot failure must reach the user
+        core.show_error(str(error))
+        return 1
+
+    try:
+        if core.is_windows():
+            return run_webview_window(url, sidecar, args.geometry)
+        return run_gtk_window(url, sidecar, args.geometry)
+    except Exception as error:  # noqa: BLE001 — a GUI failure must stay visible
+        if sidecar is not None:
+            sidecar.shutdown()
+        core.show_error(f'{type(error).__name__}: {error}')
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
