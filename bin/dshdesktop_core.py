@@ -25,11 +25,13 @@ SHUTDOWN_TIMEOUT_SECONDS = 5.0
 SIDECAR_LOGS_KEPT = 10
 URL_LINE_PATTERN = re.compile(r'dsh web:\s*(\S+)')
 
-# Files copied from an existing local harness home so the user configures
-# nothing twice: user settings, credentials (mode 600), anonymous identity,
-# and the web profile's user patch layer (plugin registrations live there).
+# Individual files copied from an existing local harness home so the user
+# configures nothing twice: user settings, credentials (mode 600), anonymous
+# identity. The web profile directory (profiles/web/) is copied wholesale
+# — it contains the plugin declarations AND the already-installed node_modules,
+# so users never need to re-download or re-register their plugins.
 IMPORT_FILES = ('settings.yaml', '.credentials.yaml', '.anonymous-user-id')
-IMPORT_PROFILE_FILES = ('profiles/web/cordis.patch.yml',)
+IMPORT_PROFILE_DIR = 'profiles/web'
 IMPORT_MARKER = '.dsh-desktop-import.json'
 
 
@@ -256,10 +258,11 @@ class Sidecar:
 def import_local_config(home: Path, force: bool = False) -> list[str]:
     """Copy configuration from an existing local harness home into `home`.
 
-    Runs once per home (marker file); returns the copied file names for
-    logging. Sessions and storages are deliberately not copied: only settings,
-    credentials, identity, and the profile patch layer, so the desktop app
-    starts already configured without touching the running harness's state.
+    Runs once per home (marker file); returns the copied paths for logging.
+    Sessions and storages are deliberately not copied: only settings,
+    credentials, identity, and the full web profile (including plugins and
+    their node_modules) so the desktop app starts with everything the user
+    already configured — no second setup required.
     """
     marker = home / IMPORT_MARKER
     if marker.exists() and not force:
@@ -270,22 +273,30 @@ def import_local_config(home: Path, force: bool = False) -> list[str]:
 
     copied: list[str] = []
     home.mkdir(parents=True, exist_ok=True)
+
+    # User-level config files (preserving original permissions).
     for name in IMPORT_FILES:
         src = source / name
         if src.is_file():
             shutil.copy2(src, home / name)
             copied.append(name)
-    for name in IMPORT_PROFILE_FILES:
-        src = source / name
-        if src.is_file():
-            dest = home / name
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(src, dest)
-            copied.append(name)
+
+    # Full web profile: cordis.yml, cordis.patch.yml, package.json, and
+    # node_modules/ (with already-installed plugins). Exclude pnpm-lock.yaml
+    # because it encodes absolute paths that change across homes.
+    src_profile = source / IMPORT_PROFILE_DIR
+    dst_profile = home / IMPORT_PROFILE_DIR
+    if src_profile.is_dir():
+        def _exclude_profile(dir, names):
+            return {n for n in names if n == 'pnpm-lock.yaml'}
+        shutil.copytree(src_profile, dst_profile, symlinks=True, ignore=_exclude_profile,
+                        dirs_exist_ok=True)
+        copied.append(f'{IMPORT_PROFILE_DIR}/')
+
     marker.write_text(json.dumps({
         'importedFrom': str(source),
         'at': time.strftime('%Y-%m-%dT%H:%M:%S'),
-        'files': copied,
+        'paths': copied,
     }, indent=2) + '\n', encoding='utf-8')
     return copied
 
