@@ -20,7 +20,7 @@ GitHub 仓库：<https://github.com/hux-hx/DeepSeek-Harness-GUI>
 ## 功能
 
 - **受监管 sidecar** —— 以独立 `DSH_HOME` + 操作系统随机端口启动 `dsh web`；关闭窗口（或 SIGTERM/SIGINT）会终止整个进程树（SIGTERM → 5 秒宽限 → SIGKILL）。
-- **免二次配置** —— 首次运行时把本地已有 harness home 的 `settings.yaml`、`.credentials.yaml`、`.anonymous-user-id` 和 web profile 的 `cordis.patch.yml` 复制进应用自己的 home（保留权限位）。供应商、模型、API key 直接带走；会话数据不受影响。`--fresh` 可跳过导入。
+- **免二次配置** —— 首次运行时把本地已有 harness home 的 `settings.yaml`、`.credentials.yaml`、`.anonymous-user-id` 以及整个 `profiles/web/` 目录（含已安装的插件包和 node_modules）一并复制进应用自己的 home（保留权限位）。供应商、模型、API key、插件依赖全部带走，无需重新下载或登记；会话数据不受影响。`--fresh` 可跳过导入。
 - **内置插件中心** —— 管理_web profile 的 dsh 插件：扫描 harness 检出里的 `@deepseek-ai` 包作为目录；展示已安装/已登记状态；通过 `dsh plugin --profile web add` 把 npm 包装进 profile；在 `cordis.patch.yml` 登记/取消登记（保留头部注释与非 insert 条目）；实时显示命令输出。可从窗口工具栏的 "Plugin Hub" 按钮或 `--plugins` 打开。
 - **原生窗口外壳** —— `Ctrl+R` 刷新、`Ctrl+Shift+R` 绕过缓存、`Ctrl+=`/`Ctrl+-`/`Ctrl+0` 缩放、`F11` 全屏、`Ctrl+Q` 退出；记住窗口尺寸与缩放；离开应用源的链接在系统浏览器打开（Linux）。
 
